@@ -1,0 +1,152 @@
+---
+title: "R Notebook for Yelp Group Assignment Q1"
+output: html_notebook
+
+---
+
+```{r}
+install.packages("DBI")
+install.packages("RMySQL")
+library("DBI")
+library("RMySQL")
+
+mydb = dbConnect(MySQL(), user='remuser', password='rempwd', dbname='yelp_db', host='ec2-34-216-35-252.us-west-2.compute.amazonaws.com', port=3306)
+
+dbListTables(mydb)
+```
+```{r}
+# Get all the variables mentioned in the hint.
+elite_2017= dbGetQuery(mydb, "select distinct user_id from elite_years where year = '2017'")
+
+num_follower = dbGetQuery(mydb, "select friend_id, count(1) from friend group by friend_id")
+names(num_follower)[2] = "cnt_followers"
+
+num_follower$is_elite2017 = 0
+num_follower$is_elite2017[num_follower$friend_id %in% elite_2017$user_id] = 1
+
+#create the dummy variable if the user is elite in 2016
+elite_2016=dbGetQuery(mydb, "select distinct user_id from elite_years where year = '2016'")
+
+num_follower$is_elite2016 = 0
+num_follower$is_elite2016[num_follower$friend_id %in% elite_2016$user_id] = 1
+
+#create the variable of times being awarded in history
+cnt_elite = dbGetQuery(mydb, "select user_id, count(1) from elite_years where year !='2017' group by user_id")
+names(cnt_elite)[2] = "num_elite"
+
+num_follower$num_elite = 0
+num_follower$num_elite[num_follower$friend_id %in% cnt_elite$user_id]=cnt_elite$num_elite
+
+#create the variable of number of review of user
+cnt_review= dbGetQuery(mydb, "select user_id, count(1) from review group by user_id")
+names(cnt_review)[2]='num_review'
+num_follower$num_review=0
+num_follower$num_review[num_follower$friend_id%in% cnt_review$user_id]=cnt_review$num_review
+
+#create the variable of number of photos of user 
+cnt_photo= dbGetQuery(mydb, "select user_id, count(caption) from review as r,photo as p where r.id=p.id group by user_id")
+names(cnt_photo)[2] = "num_photo"
+num_follower$num_photo=0
+num_follower$num_photo[num_follower$friend_id%in% cnt_photo$user_id]=cnt_photo$num_photo
+
+#create the variable of number of tips user gave 
+cnt_tip= dbGetQuery(mydb, "select user_id, count(1) from tip group by user_id")
+names(cnt_tip)[2] = "num_tip"
+num_follower$num_tip=0
+num_follower$num_tip[num_follower$friend_id%in% cnt_tip$user_id]=cnt_tip$num_tip
+```
+Add several variables that might be important in "user" table 
+We do think the chracteristics of user can effect its the number of followers.
+Hypothesis can be if the user has more funny, it can has more followers.
+```{r}
+user= dbGetQuery(mydb, "select id, useful, funny, cool, fans, average_stars from user")
+```
+Merge it to the aggregated table and get the final table
+```{r}
+names(num_follower)[1] = "user_id"
+num_follower=merge(x=num_follower,y=user,by.x='user_id', by.y='id',all.x= TRUE)
+num_follower[is.na(num_follower)]= 0
+head(num_follower)
+```
+Do a summary of the variables we are interested that might affect the number of followers
+```{r}
+summary(num_follower)
+```
+```{r}
+data<-data.frame(num_follower$cnt_followers,num_follower$is_elite2017,num_follower$is_elite2016,num_follower$num_elite,num_follower$num_review,num_follower$num_photo,num_follower$num_tip,num_follower$useful, num_follower$funny, num_follower$cool)
+
+library(dplyr)
+
+cor(data)
+```
+The boxplot can indicate the relationship between dummy variable and numeric variable.
+This boxplot is whether use is elite in 2017 or not against its follower number.
+```{r}
+boxplot(num_follower$cnt_followers ~ num_follower$is_elite2017, num_follower,ylab = "followers", xlab = "elite2017", ylim = c(0, 150))
+```
+It looks like there is an obvious difference between elite and non-elite user in the number of followers
+
+Now, let's take time effect into consideration. The boxplot is very similar to the is_elite (2017)
+```{r}
+boxplot(num_follower$cnt_followers ~ num_follower$is_elite2016, num_follower,ylab = "followers", xlab = "elite2016", ylim = c(0, 150))
+```
+```{r}
+boxplot(num_follower$cnt_followers ~ num_follower$num_elite, num_follower,ylab =" number of follower",xlab =" historical times of elite", ylim = c(0, 1500))
+```
+We can find the medians is a clear increase as the times of elite increase. 
+Also the distances within quarters increase.
+```{r}
+plot(num_follower$cnt_followers ~ num_follower$num_review,ylab = "followers", xlab = "reviewnumber",col='red',pch=19,bg='green',lwd=4,lty=2)
+```
+```{r}
+boxplot(num_follower$cnt_followers ~ num_follower$num_photo, num_follower,ylab =" Number of follower",xlab ="Photo number ", ylim = c(0, 500))
+```
+```{r}
+plot(num_follower$cnt_followers ~ num_follower$num_tip, ylab = "followers", xlab = "tip number",col='green',pch=19,bg='green',lwd=4,lty=2)
+```
+```{r}
+reg1 = summary(glm(cnt_followers~is_elite2017+is_elite2016+num_elite+num_review+num_photo+num_tip,data=num_follower,family='poisson'))
+reg1
+```
+```{r}
+exp(reg1$coefficients) - 1
+```
+```{r}
+reg2 = summary(glm(cnt_followers~is_elite2017+is_elite2016+num_elite+num_review+num_photo+num_tip+useful+funny+cool,data=num_follower,family='poisson'))
+reg2
+```
+```{r}
+exp(reg2$coefficients) - 1
+```
+Through the poisson regression, we can see that the coefficient of is_elite2017 is neagative, which is the opposite of our intuitive belief.
+Then we check the correlation table and find that is_elite2017 and is_elite2016 have a high correlation coefficient of 0.814, this multicollinarity may cause some problem.
+In this manner, we then built a intersection item of is_elite2017 and is_elite2016.
+Meanwhile, since the coefficients of useful, funny and cool are small and their correlationship is high, we may just remove those three variables from the model.
+```{r}
+num_follower$inter1617=(num_follower$is_elite2017)*(num_follower$is_elite2016)
+
+reg3=summary(glm(cnt_followers~is_elite2017+inter1617+num_elite+num_review+num_photo+num_tip,data=num_follower,family='poisson'))
+reg3
+```
+```{r}
+exp(reg3$coefficients) - 1
+```
+Through this poisson regression, we can see that the variables are all statistically significant. 
+When we control the variable of is_elite 2016=0, history elite times, the reviews,photos and tips one posts,it shows that the coefficient of is_elite 2017 is 1.759. Then we compute exp(1.759)-1=4.806. 
+It indicates that when controling other variables, if the user is elite in 2017,it will increase 480.6% followers than non-elite in 2017. So yelp elite has higher chance of having more followers.
+When we control the variable of is_elite 2016=1, history elite times, the reviews and photos one posts,it shows that the coefficient of is_elite 2017 is 1.759, the coefficient of inter1617 is -0.018. 
+Then we compute exp(1.759-0.018)-1=4.703. 
+It indicates that when controling other variables, if the user is elite in 2017,it will increase 470.3% followers than non-elite in 2017.
+Since whether the user is an elite in 2016 does not necessarily matter, we may just drop the intersection item of inter1617 from our model.
+```{r}
+reg4=summary(glm(cnt_followers~is_elite2017+num_elite+num_review+num_photo+num_tip,data=num_follower,family='poisson'))
+reg4
+```
+```{r}
+exp(reg4$coefficients) - 1
+```
+Through this poisson regression, we can see that the variables are all statistically significant. 
+When we control the variables of history elite times, the reviews, photos and tips one posts, it shows that the coefficient of is_elite 2017 is 1.749. Then we compute exp(1.749)-1=4.745. 
+It indicates that when controlling other variables, if the user is elite in 2017,it is associated with an increase of 474.5% followers compared with non-elite in 2017. 
+So yelp elites are more likely to have more followers than non-elites.
+
